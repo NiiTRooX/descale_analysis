@@ -1,0 +1,22 @@
+[project]
+name = "descale-analysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mvsfunc",
+    "vapoursynth-descale>=12",
+    "vapoursynth-resize2>=0.5.0",
+    "vapoursynth-scxvid>=3.0",
+    "vapoursynth-zsmooth>=0.19.0",
+    "vsjetpack>=2.1.1",
+]
+
+[tool.uv.sources]
+mvsfunc = { git = "https://github.com/HomeOfVapourSynthEvolution/mvsfunc" }
+
+[dependency-groups]
+dev = [
+    "vapoursynth-bestsource>=20.0",
+]

@@ -1,0 +1,4 @@
+.venv
+.vsjet
+__pycache__
+test*
