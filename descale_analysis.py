@@ -21,20 +21,20 @@ def get_cropped_width_height(clip, src_height, src_width, base_height, base_widt
 def descale_cropping_args(clip: vs.VideoNode, src_height: float, base_height: int, base_width: int, mode: str = 'wh'):
     src_width = src_height * clip.width / clip.height
     cropped_width, cropped_height = get_cropped_width_height(clip, src_height, src_width, base_height, base_width)
-    args = dict(
-        width = clip.width,
-        height = clip.height
-    )
-    args_w = dict(
-        width = cropped_width,
-        src_width = src_width,
-        src_left = (cropped_width - src_width) / 2
-    )
-    args_h = dict(
-        height = cropped_height,
-        src_height = src_height,
-        src_top = (cropped_height - src_height) / 2
-    )
+    args = {
+        'width': clip.width,
+        'height': clip.height
+    }
+    args_w = {
+        'width': cropped_width,
+        'src_width': src_width,
+        'src_left': (cropped_width - src_width) / 2
+    }
+    args_h = {
+        'height': cropped_height,
+        'src_height': src_height,
+        'src_top': (cropped_height - src_height) / 2
+    }
     if 'w' in mode.lower():
         args.update(args_w)
     if 'h' in mode.lower():
@@ -53,17 +53,16 @@ def gen_descale_error(clip: vs.VideoNode, width: float, height: float, kernel: K
         mask = based_diff_mask(clip, rescale)
         rescale = core.std.MaskedMerge(rescale, clip, mask)
     if clamp:
-        rescale = core.std.Expr([rescale], f'x 1 > 1 x 0 < 0 x ? ?')
-        clip = core.std.Expr([clip], f'x 1 > 1 x 0 < 0 x ? ?')
+        rescale = core.std.Expr([rescale], 'x 1 > 1 x 0 < 0 x ? ?')
+        clip = core.std.Expr([clip], 'x 1 > 1 x 0 < 0 x ? ?')
     diff = core.std.Expr([clip, rescale], f'x y - abs dup {thr} > swap 0 ?').std.Crop(10, 10, 10, 10)
-    diff = core.std.Expr([diff], f'x 32 *')
+    diff = core.std.Expr([diff], 'x 32 *')
     diff = core.std.PlaneStats(diff, prop="PS")
     if write_error:
         diff = core.std.FrameEval(diff, functools.partial(add_frame_average, clip=diff), prop_src=[diff])
     return diff
 
 def blur_bicubic(x, b, c, blur):
-    import math
     def normal_bicubic(x):
         if abs(x) < 1:
             return ((12 - 9 * b - 6 * c) * abs(x)**3 + (-18 + 12 * b + 6 * c) * abs(x)**2 + (6 - 2 * b)) / 6
@@ -97,7 +96,7 @@ def gen_descale_error_blur(clip: vs.VideoNode, width, height, src_height, src_to
         descale = core.descale.Debicubic(clip, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur, b=b, c=c)
         rescale = core.fmtc.resample(descale, w = clip.width, h = clip.height, kernel = "bicubic", a1 = b, a2 = c, fh = 1/blur, fv = 1/blur, sx=src_left, sy=src_top, sw=src_width, sh=src_height)
     diff = core.std.Expr([clip, rescale], f'x y - abs dup {thr} > swap 0 ?').std.Crop(10, 10, 10, 10)
-    diff = core.std.Expr([diff], f'x 32 *')
+    diff = core.std.Expr([diff], 'x 32 *')
     if write_error:
         diff = core.std.PlaneStats(diff, prop="PS")
         diff = core.std.FrameEval(diff, functools.partial(add_frame_average, clip=diff), prop_src=[diff])
@@ -140,7 +139,7 @@ def process_descale_settings_dict(clip, descale_settings, res_only=False):
             descale_type = "integer"
         else:
             descale_type = "manual"
-    processed_dict = dict(width=width, height=height, src_height=src_height, src_width=src_width, src_top=src_top, src_left=src_left, descale_type=descale_type, blur=blur)
+    processed_dict = {'width': width, 'height': height, 'src_height': src_height, 'src_width': src_width, 'src_top': src_top, 'src_left': src_left, 'descale_type': descale_type, 'blur': blur}
     if not res_only:
         kernel = instantiate_kernel(descale_settings["kernel"])
         if not isinstance(kernel, Kernel):
@@ -156,10 +155,6 @@ def test_descale_error(clip, descale_settings, thr=0.01, clamp=True, error_mask:
     """
     clip = clip.resize.Point(format=vs.GRAYS)
     clip = add_mask_value(clip)
-    from vskernels import Kernel
-    #descale_settings needs to be a dict with width, height, "kernel" (a vs-kernels object),
-    #and optionally EITHER src_ values or "fractional", a float.
-    #src_ values are the descale versions. "fractional" is equivalent to getfnative output.
     descale_settings = process_descale_settings_dict(clip, descale_settings)
     width, height, kernel, src_top, src_height, src_width, src_left = descale_settings["width"], descale_settings["height"], instantiate_kernel(descale_settings["kernel"]), descale_settings["src_top"], descale_settings["src_height"], descale_settings["src_width"], descale_settings["src_left"]
     def get_calc(n, f, clip, core):
@@ -207,11 +202,11 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
         #avg_error_ker = kernel[9]
         descale_kernel = instantiate_kernel(kernel["kernel"])
         if hasattr(descale_kernel, "b"):
-            kernelappend = f"bicubic_{getattr(descale_kernel, 'b')}_{getattr(descale_kernel, 'c')}"
+            kernelappend = f"bicubic_{descale_kernel.b}_{descale_kernel.c}"
         elif hasattr(descale_kernel, "taps"):
-            kernelappend = f"lanczos{getattr(descale_kernel, 'taps')}"
+            kernelappend = f"lanczos{descale_kernel.taps}"
         else:
-            kernelappend = f"bilinear"
+            kernelappend = "bilinear"
         if descale_settings["descale_type"] == "integer":
             kernelappend += f"_{descale_settings['width']}_{descale_settings['height']}"
         elif descale_settings["descale_type"] == "fractional":
@@ -352,8 +347,8 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
 def checkboth(frame, res):
     res_info = process_descale_settings_dict(frame, res, res_only=True)
     blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
-    for i in range(0,4):
-        for j in range(0,7):
+    for i in range(0, 4):
+        for j in range(0, 7):
             b = i
             c = j
             b = b * 0.16666
@@ -370,8 +365,8 @@ def checkboth(frame, res):
 def checkbothextended(frame, res_info):
     res_info = process_descale_settings_dict(frame, res_info, res_only=True)
     blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
-    for i in range(0,4):
-        for j in range(0,21):
+    for i in range(0, 4):
+        for j in range(0, 21):
             b = i
             c = j
             b = b * 1/6
@@ -388,8 +383,8 @@ def checkbothextended(frame, res_info):
 def checkboth_neg(frame, res):
     res_info = process_descale_settings_dict(frame, res, res_only=True)
     blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
-    for i in range(1,7):
-        for j in range(0,7):
+    for i in range(1, 7):
+        for j in range(0, 7):
             b = -i
             c = j
             b = b * 0.16666
