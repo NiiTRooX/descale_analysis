@@ -143,7 +143,12 @@ def process_descale_settings_dict(clip, descale_settings, res_only=False):
         processed_dict["kernel"] = kernel
     return processed_dict
 
-def test_descale_error(clip, descale_settings, thr=0.01, clamp=True):
+def test_descale_error(clip, descale_settings, thr=0.01, clamp=True, error_mask: bool = False):
+    """
+    descale_settings needs to be a dict with width, height, "kernel" (a vs-kernels object),
+    and optionally EITHER src_ values or "fractional", a float.  
+    src_ values are the descale versions. "fractional" is equivalent to getfnative output.
+    """
     clip = clip.resize.Point(format=vs.GRAYS)
     clip = add_mask_value(clip)
     from vskernels import Kernel
