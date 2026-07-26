@@ -168,7 +168,7 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
     if isinstance(kernels, dict):
         kernels = [kernels]
     clipdown = core.resize.Bicubic(clip, 854, 480, format=vs.YUV420P8)
-    clipdown = core.wwxd.WWXD(clipdown)
+    clipdown = core.scxvid.Scxvid(clipdown, prop="Scenechange")
     clip = core.resize.Point(clip, format=vs.GRAYS)
     blur=False
     for kernel in kernels:
