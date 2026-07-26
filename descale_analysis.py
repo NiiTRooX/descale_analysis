@@ -1,8 +1,10 @@
-import vapoursynth as vs
-from vapoursynth import core
 import functools
-from vskernels import Kernel, Bicubic, Lanczos, Bilinear, Point
+
 from mvsfunc import ShowAverage
+from vskernels import Bicubic, Bilinear, Kernel, Lanczos
+from vsmasktools import based_diff_mask
+from vstools import core, vs
+
 
 def instantiate_kernel(krnl):
     if isinstance(krnl, type) and (krnl is Kernel or issubclass(krnl, Kernel)):
@@ -43,10 +45,13 @@ def add_frame_average(n, clip, f):
     diff_raw = f.props['PSAverage']
     return core.text.Text(clip, str(diff_raw))
 
-def gen_descale_error(clip: vs.VideoNode, width: float, height: float, kernel: Kernel, src_height: float, src_top: float, src_width: float, src_left: float, thr: float = 0.01, write_error = False, clamp = True) -> vs.VideoNode:
+def gen_descale_error(clip: vs.VideoNode, width: float, height: float, kernel: Kernel, src_height: float, src_top: float, src_width: float, src_left: float, thr: float = 0.01, write_error = False, clamp = True, error_mask: bool = False) -> vs.VideoNode:
     clip = clip.resize.Point(format=vs.GRAYS, matrix_s='709' if clip.format.color_family == vs.RGB else None)
     descale = kernel.descale(clip, width=width, height=height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left)
     rescale = kernel.scale(descale, width=clip.width, height=clip.height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left)
+    if error_mask:
+        mask = based_diff_mask(clip, rescale)
+        rescale = core.std.MaskedMerge(rescale, clip, mask)
     if clamp:
         rescale = core.std.Expr([rescale], f'x 1 > 1 x 0 < 0 x ? ?')
         clip = core.std.Expr([clip], f'x 1 > 1 x 0 < 0 x ? ?')
@@ -165,11 +170,11 @@ def test_descale_error(clip, descale_settings, thr=0.01, clamp=True, error_mask:
         else:
             diff_primary = diff_raw / mask_value
         return core.text.Text(clip, str(diff_primary))
-    diff = gen_descale_error(clip, width=width, height=height, kernel=kernel, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, thr=thr, clamp=clamp)
+    diff = gen_descale_error(clip, width=width, height=height, kernel=kernel, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, thr=thr, clamp=clamp, error_mask=error_mask)
     diff = core.std.PlaneStats(diff, prop='PS')
     return core.std.FrameEval(diff, functools.partial(get_calc, clip=diff, core=vs.core), prop_src=[diff])
 
-def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, avg_error_thr = 0.006, thr = 0.01, dfttest=False):
+def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, avg_error_thr = 0.006, thr = 0.01, dfttest=False, error_mask: bool = False):
     if isinstance(kernels, dict):
         kernels = [kernels]
     clipdown = core.resize.Bicubic(clip, 854, 480, format=vs.YUV420P8)
@@ -219,7 +224,7 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
             kernelres = descale_settings
             diff = gen_descale_error_blur(clip, kernelres=kernelres, thr=thr)
         else:
-            diff = gen_descale_error(clip, kernel=descale_settings['kernel'], width=descale_settings['width'], height=descale_settings['height'], src_top=descale_settings['src_top'], src_height=descale_settings['src_height'], src_width=descale_settings['src_width'], src_left=descale_settings['src_left'], thr=thr)
+            diff = gen_descale_error(clip, kernel=descale_settings['kernel'], width=descale_settings['width'], height=descale_settings['height'], src_top=descale_settings['src_top'], src_height=descale_settings['src_height'], src_width=descale_settings['src_width'], src_left=descale_settings['src_left'], thr=thr, error_mask=error_mask)
         diff = core.std.PlaneStats(diff, prop='PS')
         kerneldiffs.append(diff)
         frame_ranges.append([])
