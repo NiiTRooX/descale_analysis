@@ -12,7 +12,6 @@ def instantiate_kernel(krnl):
 
 def get_cropped_width_height(clip, src_height, src_width, base_height, base_width):
     from math import floor
-    assert base_height >= src_height
     cropped_width = base_width - 2 * floor((base_width - src_width) / 2)
     cropped_height = base_height - 2 * floor((base_height - src_height) / 2)
     return cropped_width, cropped_height
@@ -44,57 +43,17 @@ def add_frame_average(n, clip, f):
     diff_raw = f.props['PSAverage']
     return core.text.Text(clip, str(diff_raw))
 
-def gen_descale_error(clip: vs.VideoNode, width: float, height: float, kernel: Kernel, src_height: float, src_top: float, src_width: float, src_left: float, thr: float = 0.01, write_error = False, clamp = True) -> vs.VideoNode:
+def gen_descale_error(clip: vs.VideoNode, width: float, height: float, kernel: Kernel, src_height: float, src_top: float, src_width: float, src_left: float, thr: float = 0.01, scale_args: dict = {}, write_error = False, clamp = True, prop_prefix = "PS") -> vs.VideoNode:
     clip = clip.resize.Point(format=vs.GRAYS, matrix_s='709' if clip.format.color_family == vs.RGB else None)
-    descale = kernel.descale(clip, width=width, height=height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left)
-    rescale = kernel.scale(descale, width=clip.width, height=clip.height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left)
+    descale = kernel.descale(clip, width=width, height=height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left, **scale_args)
+    rescale = kernel.scale(descale, width=clip.width, height=clip.height, src_height=src_height, src_top=src_top, src_width=src_width, src_left=src_left, **scale_args)
     if clamp:
         rescale = core.std.Expr([rescale], 'x 1 > 1 x 0 < 0 x ? ?')
         clip = core.std.Expr([clip], 'x 1 > 1 x 0 < 0 x ? ?')
     diff = core.std.Expr([clip, rescale], f'x y - abs dup {thr} > swap 0 ?').std.Crop(10, 10, 10, 10)
     diff = core.std.Expr([diff], 'x 32 *')
-    diff = core.std.PlaneStats(diff, prop="PS")
+    diff = core.std.PlaneStats(diff, prop=prop_prefix)
     if write_error:
-        diff = core.std.FrameEval(diff, functools.partial(add_frame_average, clip=diff), prop_src=[diff])
-    return diff
-
-def blur_bicubic(x, b, c, blur):
-    def normal_bicubic(x):
-        if abs(x) < 1:
-            return ((12 - 9 * b - 6 * c) * abs(x)**3 + (-18 + 12 * b + 6 * c) * abs(x)**2 + (6 - 2 * b)) / 6
-        elif abs(x) < 2:
-            return ((-1 * b - 6 * c) * abs(x) ** 3 + (6 * b + 30 * c) * abs(x) ** 2 + (-12 * b - 48 * c) * abs(x) + (8 * b + 24 * c)) / 6
-        else:
-            return 0
-    def blurred(x):
-        return normal_bicubic(x/blur)
-    if (blurred(x-2) + blurred(x-1) + blurred(x) + blurred(x + 1) + blurred(x + 2)) == 0:
-        return 0
-    else:
-        return blurred(x) / (blurred(x-2) + blurred(x-1) + blurred(x) + blurred(x + 1) + blurred(x + 2))
-
-def blur_lanczos(x, taps, blur):
-    import math
-    def sinc(x):
-        return 1.0 if x == 0 else math.sin(x * math.pi) / (x * math.pi)
-    return sinc(x/blur) * sinc(x/blur / taps)
-
-#experimental
-def gen_descale_error_blur(clip: vs.VideoNode, width, height, src_height, src_top, src_width, src_left, b, c, blur, thr = 0.01, write_error = False, taps=None, bilinear=False) -> vs.VideoNode:
-    clip = clip.resize.Point(format=vs.GRAYS, matrix_s='709' if clip.format.color_family == vs.RGB else None)
-    if bilinear == True:
-        descale = core.descale.Debilinear(clip, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur)
-        rescale = core.fmtc.resample(descale, w = clip.width, h = clip.height, kernel = "bilinear", fh = 1/blur, fv = 1/blur, sx=src_left, sy=src_top, sw=src_width, sh=src_height)
-    elif taps:
-        descale = core.descale.Delanczos(clip, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur, taps=taps)
-        rescale = core.fmtc.resample(descale, w = clip.width, h = clip.height, kernel = "lanczos", a1 = taps, fh = 1/blur, fv = 1/blur, sx=src_left, sy=src_top, sw=src_width, sh=src_height)
-    else:
-        descale = core.descale.Debicubic(clip, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur, b=b, c=c)
-        rescale = core.fmtc.resample(descale, w = clip.width, h = clip.height, kernel = "bicubic", a1 = b, a2 = c, fh = 1/blur, fv = 1/blur, sx=src_left, sy=src_top, sw=src_width, sh=src_height)
-    diff = core.std.Expr([clip, rescale], f'x y - abs dup {thr} > swap 0 ?').std.Crop(10, 10, 10, 10)
-    diff = core.std.Expr([diff], 'x 32 *')
-    if write_error:
-        diff = core.std.PlaneStats(diff, prop="PS")
         diff = core.std.FrameEval(diff, functools.partial(add_frame_average, clip=diff), prop_src=[diff])
     return diff
 
@@ -114,12 +73,6 @@ def process_descale_settings_dict(clip, descale_settings, res_only=False):
         raise Exception("height must be an int")
     if not isinstance(width, int):
         raise Exception("width must be an int")
-    if "blur" in descale_settings:
-        if "src_height" in descale_settings or "src_width" in descale_settings or "src_left" in descale_settings or "src_top" in descale_settings or "fractional" in descale_settings:
-            raise Exception("Blur only works with pure fractional descales at the moment.")
-        blur = descale_settings["blur"]
-    else:
-        blur = None
     if "fractional" in descale_settings:
         descale_type = "fractional"
         if "src_height" in descale_settings or "src_width" in descale_settings or "src_left" in descale_settings or "src_top" in descale_settings:
@@ -135,12 +88,16 @@ def process_descale_settings_dict(clip, descale_settings, res_only=False):
             descale_type = "integer"
         else:
             descale_type = "manual"
-    processed_dict = {'width': width, 'height': height, 'src_height': src_height, 'src_width': src_width, 'src_top': src_top, 'src_left': src_left, 'descale_type': descale_type, 'blur': blur}
+    processed_dict = dict(width=width, height=height, src_height=src_height, src_width=src_width, src_top=src_top, src_left=src_left, descale_type=descale_type)
     if not res_only:
         kernel = instantiate_kernel(descale_settings["kernel"])
         if not isinstance(kernel, Kernel):
             raise Exception("'kernel' needs to be a vskernels kernel, e.g. vskernels.Bilinear() etc.")
         processed_dict["kernel"] = kernel
+    if "scale_args" in descale_settings:
+        processed_dict["scale_args"] = descale_settings["scale_args"]
+    else:
+        processed_dict["scale_args"] = {}
     return processed_dict
 
 def test_descale_error(clip, descale_settings, thr=0.01, clamp=True):
@@ -161,21 +118,18 @@ def test_descale_error(clip, descale_settings, thr=0.01, clamp=True):
         else:
             diff_primary = diff_raw / mask_value
         return core.text.Text(clip, str(diff_primary))
-    diff = gen_descale_error(clip, width=width, height=height, kernel=kernel, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, thr=thr, clamp=clamp)
+    diff = gen_descale_error(clip, width=width, height=height, kernel=kernel, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, thr=thr, clamp=clamp, scale_args=descale_settings["scale_args"])
     diff = core.std.PlaneStats(diff, prop='PS')
     return core.std.FrameEval(diff, functools.partial(get_calc, clip=diff, core=vs.core), prop_src=[diff])
 
-def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, avg_error_thr = 0.006, thr = 0.01, dfttest=False):
+def get_descale_ranges(clip, kernels, txtfilename, ind_error_thr = 0.01, avg_error_thr = 0.006, thr = 0.01, dfttest=False):
     if isinstance(kernels, dict):
         kernels = [kernels]
     clipdown = core.resize.Bicubic(clip, 854, 480, format=vs.YUV420P8)
     clipdown = core.scxvid.Scxvid(clipdown, prop="Scenechange")
     clip = core.resize.Point(clip, format=vs.GRAYS)
-    blur=False
     for kernel in kernels:
         descale_settings = process_descale_settings_dict(clip, kernel)
-        if descale_settings["blur"]:
-            blur = True
     if dfttest:
         from vsdenoise import DFTTest
         clip = DFTTest.denoise(clip)
@@ -210,12 +164,7 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
         else:
             kernelappend += f"_{descale_settings['width']}_{descale_settings['height']}_{round(descale_settings['src_top'], 2)}_{round(descale_settings['src_height'], 2)}_{round(descale_settings['src_left'], 2)}_{round(descale_settings['src_width'], 2)}"
         kernel_appends.append(kernelappend)
-        if blur:
-            print("shouldn't be seeing this message unless you're doing blur")
-            kernelres = descale_settings
-            diff = gen_descale_error_blur(clip, kernelres=kernelres, thr=thr)
-        else:
-            diff = gen_descale_error(clip, kernel=descale_settings['kernel'], width=descale_settings['width'], height=descale_settings['height'], src_top=descale_settings['src_top'], src_height=descale_settings['src_height'], src_width=descale_settings['src_width'], src_left=descale_settings['src_left'], thr=thr)
+        diff = gen_descale_error(clip, kernel=descale_settings['kernel'], width=descale_settings['width'], height=descale_settings['height'], src_top=descale_settings['src_top'], src_height=descale_settings['src_height'], src_width=descale_settings['src_width'], src_left=descale_settings['src_left'], thr=thr, scale_args=descale_settings["scale_args"])
         diff = core.std.PlaneStats(diff, prop='PS')
         kerneldiffs.append(diff)
         frame_ranges.append([])
@@ -343,23 +292,25 @@ def get_descale_ranges(clip, kernels, txtfilename=None, ind_error_thr = 0.01, av
 def checkboth(frame, res):
     res_info = process_descale_settings_dict(frame, res, res_only=True)
     blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
-    for i in range(0, 4):
-        for j in range(0, 7):
+    for i in range(0,1):
+        for j in range(0,7):
             b = i
             c = j
             b = b * 0.16666
             c = c * 0.16666
-            a = gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(b, c), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
+            a = gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(b, c), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"])
+            a = core.text.Text(a, f"\nBicubic ({round(b, 2)}, {round(c, 2)})")
             blank_clip += a
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Bilinear(), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(2), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(3), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(4), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(5), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(0.3333, 0.3333), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nBicubic ({round(0.3333, 2)}, {round(0.3333, 2)})")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Bilinear(), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nBilinear")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(2), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(2)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(3), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(3)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(4), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(4)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(5), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(5)")
     return blank_clip[1:]
 
-def checkbothextended(frame, res_info):
-    res_info = process_descale_settings_dict(frame, res_info, res_only=True)
+def checkbothextended(frame, res):
+    res_info = process_descale_settings_dict(frame, res, res_only=True)
     blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
     for i in range(0, 4):
         for j in range(0, 21):
@@ -367,66 +318,62 @@ def checkbothextended(frame, res_info):
             c = j
             b = b * 1/6
             c = c * 0.05
-            a = gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(b, c), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
+            a = gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(b, c), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nBicubic ({round(b, 2)}, {round(c, 2)})")
             blank_clip += a
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Bilinear(), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(2), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(3), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(4), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(5), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Bilinear(), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nBilinear")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(2), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(2)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(3), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(3)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(4), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(4)")
+    blank_clip += gen_descale_error(frame, res_info["width"], res_info["height"], Lanczos(5), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=res_info["scale_args"]).text.Text(f"\nLanczos(5)")
     return blank_clip[1:]
 
-def checkboth_neg(frame, res):
-    res_info = process_descale_settings_dict(frame, res, res_only=True)
-    blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
-    for i in range(1, 7):
-        for j in range(0, 7):
-            b = -i
-            c = j
-            b = b * 0.16666
-            c = c * 0.16666
-            a = gen_descale_error(frame, res_info["width"], res_info["height"], Bicubic(b, c), res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True)
-            blank_clip += a
-    return blank_clip[1:]
-
-def manual_check(frame, res_info, kernels):
+def manual_check(frame, res_info, kernels, downscale = False):
     res_info = process_descale_settings_dict(frame, res_info, res_only=True)
-    descale = kernels[0].descale(frame, width=res_info["width"], height=res_info["height"], src_left=res_info["src_left"], src_width=res_info["src_width"], src_top=res_info["src_top"], src_height=res_info["src_height"])
+    scale_args = res_info["scale_args"]
+    descale = kernels[0].descale(frame, width=res_info["width"], height=res_info["height"], src_left=res_info["src_left"], src_width=res_info["src_width"], src_top=res_info["src_top"], src_height=res_info["src_height"], **scale_args)
     for descale_kernel in kernels:
-        descale += descale_kernel.descale(frame, width=res_info["width"], height=res_info["height"], src_left=res_info["src_left"], src_width=res_info["src_width"], src_top=res_info["src_top"], src_height=res_info["src_height"])
+        descale += descale_kernel.descale(frame, width=res_info["width"], height=res_info["height"], src_left=res_info["src_left"], src_width=res_info["src_width"], src_top=res_info["src_top"], src_height=res_info["src_height"], **scale_args)
     fullres_srctop = res_info["src_top"] * -1 * frame.height / res_info["height"]
     fullres_srcheight = res_info["src_height"] * frame.height / res_info["height"]
     fullres_srcleft = res_info["src_left"] * -1 * frame.width / res_info["width"]
     fullres_srcwidth = res_info["src_width"] * frame.width / res_info["width"]
-    descale += core.resize.Bicubic(frame, res_info["width"], res_info["height"], src_left=fullres_srcleft, src_width=fullres_srcwidth, src_top=fullres_srctop, src_height=fullres_srcheight)
+    if downscale:
+        descale += core.resize.Bicubic(frame, res_info["width"], res_info["height"], src_left=fullres_srcleft, src_width=fullres_srcwidth, src_top=fullres_srctop, src_height=fullres_srcheight)
     return descale[1:]
 
-def search_for_height(frame, kernel, src_top_start, src_height, height, src_top_step = 0.0125):
-    clip = gen_descale_error(frame, width=frame.width, height=height, src_height=src_height, src_top = src_top_start, src_left=0, src_width=frame.width, kernel=kernel)
-    for thing in range(1, 20):
-        clip += gen_descale_error(frame, width=frame.width, height=height, src_height=src_height, src_top = src_top_start - src_top_step * thing, src_left=0, src_width=frame.width, kernel=kernel)
+def search_for_height(frame, kernel, src_top_start, src_height, height, src_top_step = 0.025):
+    clip = gen_descale_error(frame, width=frame.width, height=height, src_height=src_height, src_top = src_top_start, src_left=0, src_width=frame.width, kernel=kernel).text.Text(f"\nsrc_top = {round(src_top_start, 3)}")
+    for thing in range(1, 41):
+        clip += gen_descale_error(frame, width=frame.width, height=height, src_height=src_height, src_top = src_top_start - src_top_step * thing, src_left=0, src_width=frame.width, kernel=kernel).text.Text(f"\nsrc_top = {round(src_top_start - src_top_step * thing, 3)}")
     return ShowAverage(clip)
 
-def search_for_width(frame, kernel, src_left_start, src_width, width, src_left_step = 0.0125):
+def search_for_width(frame, kernel, src_left_start, src_width, width, src_left_step = 0.025):
     
-    clip = gen_descale_error(frame, width=width, height=frame.height, src_height=frame.height, src_top = 0, src_left=src_left_start, src_width=src_width, kernel=kernel)
-    for thing in range(1, 20):
-        clip += gen_descale_error(frame, width=width, height=frame.height, src_height=frame.height, src_top = 0, src_left=src_left_start - src_left_step * thing, src_width=src_width, kernel=kernel)
+    clip = gen_descale_error(frame, width=width, height=frame.height, src_height=frame.height, src_top = 0, src_left=src_left_start, src_width=src_width, kernel=kernel).text.Text(f"\nsrc_left = {round(src_left_start, 3)}")
+    for thing in range(1, 41):
+        clip += gen_descale_error(frame, width=width, height=frame.height, src_height=frame.height, src_top = 0, src_left=src_left_start - src_left_step * thing, src_width=src_width, kernel=kernel).text.Text(f"\nsrc_left = {round(src_left_start - src_left_step * thing, 3)}")
     return ShowAverage(clip)
 
-def find_blur(frame, b, c, src_top, src_height, src_left, src_width, width, height, bilinear=False, taps=None, blur_start=0.90, fractional=False):
-    clip = gen_descale_error_blur(frame, width=width, height=height, src_height=src_height, src_top = src_top, src_left=src_left, src_width=src_width, blur=blur_start, b=b, c=c, taps=taps, bilinear=bilinear)
-    for thing in range(1, 21):
-        clip += gen_descale_error_blur(frame, width=width, height=height, src_height=src_height, src_top = src_top, src_left=src_left, src_width=src_width, blur=blur_start + thing * 0.01, b=b, c=c, taps=taps, bilinear=bilinear)
-    return ShowAverage(clip)
+def test_sigmoid_slopes(frame, kernel, res, center = 0.5):
+    res_info = process_descale_settings_dict(frame, res, res_only=True)
+    blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20, length=2)
+    for i in range(2,41):
+        a = gen_descale_error(frame, res_info["width"], res_info["height"], kernel, res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=dict(sigmoid=(i* 0.5, center)))
+        blank_clip += a
+    return blank_clip
 
-def look_at_blur(frame, b, c, src_top, src_height, src_left, src_width, width, height, blur_start, bilinear=False):
-    if bilinear:
-        clip = core.descale.Debilinear(frame, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur_start)
-        for thing in range(1, 21):
-            clip += core.descale.Debilinear(frame, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur_start + 0.01 * thing)
-    else:
-        clip = core.descale.Debicubic(frame, b=b, c=c, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur_start)
-        for thing in range(1, 21):
-            clip += core.descale.Debicubic(frame, b=b, c=c, width=width, height=height, src_top = src_top, src_height = src_height, src_width=src_width, src_left=src_left, blur=blur_start + 0.01 * thing)
-    return clip
+def test_sigmoid_centers(frame, kernel, res, slope):
+    res_info = process_descale_settings_dict(frame, res, res_only=True)
+    blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
+    for i in range(0,21):
+        a = gen_descale_error(frame, res_info["width"], res_info["height"], kernel, res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=dict(sigmoid=(slope, i* 0.05)))
+        blank_clip += a
+    return blank_clip
+
+def test_blur_error(frame, kernel, res, starting_blur=0.9, blur_step=0.01):
+    res_info = process_descale_settings_dict(frame, res, res_only=True)
+    blank_clip = core.std.BlankClip(frame, height = frame.height - 20, width = frame.width - 20)
+    for i in range(0,21):
+        a = gen_descale_error(frame, res_info["width"], res_info["height"], kernel, res_info["src_height"], res_info["src_top"], res_info["src_width"], res_info["src_left"], write_error=True, scale_args=dict(blur=starting_blur + i*blur_step))
+        blank_clip += a
+    return blank_clip[1:]
